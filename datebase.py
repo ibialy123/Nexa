@@ -39,6 +39,18 @@ def init_db():
           )
                 """)
 
+    cur.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    event_date DATE NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                    )
+                """)
+
     try:
         cur.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER DEFAULT 0")
         print("Dodano kolumnę email_verified")
