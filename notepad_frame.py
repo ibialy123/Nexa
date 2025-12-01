@@ -1,9 +1,21 @@
-﻿import tkinter as tk
-from tkinter import font as tkfont, messagebox, scrolledtext
+import tkinter as tk
+from tkinter import font as tkfont, messagebox, scrolledtext, filedialog #######
 import json
 import os
+import shutil 
+import re     
+import uuid   
+
+
+try:
+    from PIL import Image, ImageTk, ImageGrab 
+    HAS_PILLOW = True 
+except ImportError:
+    HAS_PILLOW = False 
+    print("Brak biblioteki Pillow. Obrazy nie będą działać. Zainstaluj: pip install Pillow") 
 
 NOTES_FILE = "notes.json"
+IMAGES_DIR = "images" 
 
 
 class NotepadApplication(tk.Frame):
@@ -15,6 +27,14 @@ class NotepadApplication(tk.Frame):
         self.current_note_index = None
         self.displayed_notes_indices = []
 
+        # ZMIENNE DO OBRAZÓW 
+        self.images_cache = {}       
+        self.pil_images = {}         
+        self.in_preview_mode = False 
+
+        # Stwórz folder na obrazy
+        if not os.path.exists(IMAGES_DIR): 
+            os.makedirs(IMAGES_DIR) 
         # struktura interfejsu
         self.paned_window = tk.PanedWindow(self, orient="horizontal", sashrelief="raised")
         self.paned_window.pack(fill="both", expand=True)
@@ -53,9 +73,14 @@ class NotepadApplication(tk.Frame):
         self.editor_frame = tk.Frame(self.paned_window)
         self.editor_frame.pack(fill="both", expand=True)
 
-        self.title_label = tk.Label(self.editor_frame, text="Tytuł:", font=("Helvetica", 14, "bold"))
-        self.title_label.pack(pady=(10, 5), anchor="nw", padx=10)
+        # --- Pasek tytułu ---
+        top_bar = tk.Frame(self.editor_frame, bg="white")
+        top_bar.pack(fill="x", padx=10, pady=5)
+        
+        self.title_label = tk.Label(top_bar, text="Tytuł:", font=("Helvetica", 14, "bold")) 
+        self.title_label.pack(side="left")
 
+        # pole tekstowe tytułu
         self.title_entry = tk.Entry(self.editor_frame, font=("Helvetica", 14), relief="solid", bd=1)
         self.title_entry.pack(fill="x", padx=10, pady=(0, 10), ipady=4)
 
@@ -63,6 +88,9 @@ class NotepadApplication(tk.Frame):
                                                       undo=True, font=("Helvetica", 12),
                                                       relief="solid", bd=1)
         self.notepad_text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        
+        # SKRÓTY KLAWISZOWE
+        self.notepad_text.bind("<Control-v>", self.handle_paste)
 
         self.paned_window.add(self.editor_frame, width=600)
 
@@ -87,6 +115,14 @@ class NotepadApplication(tk.Frame):
 
         settings_menu.add_command(label="Nowa notatka", command=self.file_new)
         settings_menu.add_command(label="Zapisz notatkę", command=self.file_save)
+        settings_menu.add_separator()
+
+        
+        settings_menu.add_command(label="Wstaw obraz (z pliku)", command=self.insert_image) 
+        settings_menu.add_separator() 
+
+        settings_menu.add_command(label="Otwórz Kalendarz",
+                                  command=lambda: self.controller.show_frame("CalendarApplication", {"id": self.current_user_id}))
         settings_menu.add_separator()
 
         settings_menu.add_command(label="Zmień motyw",
@@ -119,7 +155,7 @@ class NotepadApplication(tk.Frame):
 
         if hasattr(self, 'settings_menu'):
             try:
-                self.settings_menu.entryconfig(3, label=theme_label_text)
+                self.settings_menu.entryconfig(5, label=theme_label_text)
             except Exception:
                 pass
 
@@ -155,7 +191,6 @@ class NotepadApplication(tk.Frame):
 
     # --- FUNKCJE OBSŁUGI NOTATEK ---
     def load_notes_from_file(self):
-        """Teraz ładujemy tylko notatki danego użytkownika"""
         if not self.current_user_id:
             self.all_notes = []
             return
@@ -164,7 +199,6 @@ class NotepadApplication(tk.Frame):
             try:
                 with open(NOTES_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                    # filtracja notatek po user_id
                     self.all_notes = [
                         note for note in data.get("notes", [])
                         if note.get("user_id") == self.current_user_id
@@ -175,12 +209,10 @@ class NotepadApplication(tk.Frame):
             self.all_notes = []
 
     def save_notes_to_file(self):
-        """Zapisujemy wszystkie notatki, ale dodajemy user_id"""
         if not self.current_user_id:
             messagebox.showerror("Błąd", "Nie jesteś zalogowany!")
             return False
 
-        # Wczytywanie notatek wszystkich użytkowników
         all_users_notes = []
         if os.path.exists(NOTES_FILE):
             try:
@@ -190,12 +222,10 @@ class NotepadApplication(tk.Frame):
             except json.JSONDecodeError:
                 all_users_notes = []
 
-        # usuwanie starych notatek  użytkownika
         all_users_notes = [
             note for note in all_users_notes
             if note.get("user_id") != self.current_user_id
         ]
-
 
         for note in self.all_notes:
             note["user_id"] = self.current_user_id
@@ -209,18 +239,16 @@ class NotepadApplication(tk.Frame):
             messagebox.showerror("Błąd zapisu", f"Nie udało się zapisać: {e}")
             return False
 
-    # --- Funkcja filtrująca ---
     def filter_notes(self, *args):
         search_term = self.search_var.get().lower()
         self.populate_notes_list(filter_text=search_term)
 
     def populate_notes_list(self, filter_text=""):
         self.notes_listbox.delete(0, tk.END)
-        self.displayed_notes_indices = []  # Reset mapowania indeksów
+        self.displayed_notes_indices = []
 
         for index, note in enumerate(self.all_notes):
             title = note.get("title", "Brak tytułu")
-            # Sprawdź, czy tytuł zawiera szukaną frazę
             if filter_text in title.lower():
                 self.notes_listbox.insert(tk.END, title)
                 self.displayed_notes_indices.append(index)
@@ -230,10 +258,7 @@ class NotepadApplication(tk.Frame):
         if not selected_indices:
             return
 
-        # Pobieramy indeks z listy (która może być przefiltrowana)
         listbox_index = selected_indices[0]
-
-        # Mapujemy go na prawdziwy indeks w bazie danych
         real_index = self.displayed_notes_indices[listbox_index]
 
         self.current_note_index = real_index
@@ -241,31 +266,30 @@ class NotepadApplication(tk.Frame):
 
         self.title_entry.delete(0, tk.END)
         self.title_entry.insert(0, note.get("title", ""))
-        self.notepad_text.delete(1.0, tk.END)
-        self.notepad_text.insert(1.0, note.get("content", ""))
+        
+        # Wczytywanie obrazów
+        content = note.get("content", "")
+        self.render_content_with_images(content)
 
     def file_new(self):
         if not self.current_user_id:
             messagebox.showerror("Błąd", "Musisz być zalogowany, aby tworzyć notatki!")
             return
-
+        
         self.title_entry.delete(0, tk.END)
         self.notepad_text.delete(1.0, tk.END)
         self.current_note_index = None
         self.notes_listbox.selection_clear(0, tk.END)
-
-        # Czyścimy wyszukiwanie przy nowej notatce
         self.search_var.set("")
-
         messagebox.showinfo("Nowa notatka", "Wpisz tytuł i treść, a następnie naciśnij 'Zapisz notatkę'.")
 
     def file_save(self):
         if not self.current_user_id:
             messagebox.showerror("Błąd", "Musisz być zalogowany, aby zapisywać notatki!")
             return
-
+        
         title = self.title_entry.get()
-        content = self.notepad_text.get(1.0, tk.END).strip()
+        content = self.serialize_content_with_images() # Zapis z obrazami
 
         if not title:
             messagebox.showwarning("Brak tytułu", "Notatka musi mieć tytuł, aby ją zapisać.")
@@ -274,7 +298,7 @@ class NotepadApplication(tk.Frame):
         note_data = {
             "title": title,
             "content": content,
-            "user_id": self.current_user_id  
+            "user_id": self.current_user_id
         }
 
         if self.current_note_index is not None:
@@ -284,16 +308,163 @@ class NotepadApplication(tk.Frame):
             self.current_note_index = len(self.all_notes) - 1
 
         if self.save_notes_to_file():
-            # Czyścimy wyszukiwanie po zapisie, żeby nowa notatka była widoczna
+            
             self.search_var.set("")
             self.populate_notes_list()
-
-            # zapisana notatka
             try:
                 display_index = self.displayed_notes_indices.index(self.current_note_index)
                 self.notes_listbox.selection_set(display_index)
                 self.notes_listbox.see(display_index)
             except ValueError:
                 pass
-
             messagebox.showinfo("Zapisano", f"Notatka '{title}' została zapisana.")
+
+    # --- OBSŁUGA OBRAZKÓW (Skalowanie i Wklejanie) ---
+    
+    def render_content_with_images(self, content):
+        self.notepad_text.delete("1.0", tk.END)
+        self.images_cache.clear()
+        self.pil_images.clear()
+        
+        parts = re.split(r"(\[\[IMG:.*?\]\])", content)
+        
+        for part in parts:
+            if part.startswith("[[IMG:") and part.endswith("]]"):
+                inner = part[6:-2]
+                if "|" in inner:
+                    filename, dims = inner.split("|")
+                    try:
+                        w, h = map(int, dims.split("x"))
+                        self.insert_image_direct(filename, (w, h))
+                    except:
+                        self.insert_image_direct(filename)
+                else:
+                    self.insert_image_direct(inner)
+            else:
+                self.notepad_text.insert(tk.END, part)
+
+    def insert_image_direct(self, filename, size=None):
+        path = os.path.join(IMAGES_DIR, filename)
+        if os.path.exists(path):
+            try:
+                if filename not in self.pil_images:
+                    self.pil_images[filename] = Image.open(path)
+                
+                pil_img = self.pil_images[filename]
+                
+                if size:
+                    pil_img_resized = pil_img.resize(size, Image.Resampling.LANCZOS)
+                else:
+                    if pil_img.width > 400:
+                        ratio = 400 / pil_img.width
+                        new_h = int(pil_img.height * ratio)
+                        pil_img_resized = pil_img.resize((400, new_h), Image.Resampling.LANCZOS)
+                    else:
+                        pil_img_resized = pil_img
+
+                tk_img = ImageTk.PhotoImage(pil_img_resized)
+                self.images_cache[filename] = tk_img 
+                
+                img_tag = f"IMG_{filename}_{uuid.uuid4().hex[:6]}"
+                self.notepad_text.image_create(tk.END, image=tk_img, name=img_tag)
+                
+                # Dodaj tagi do skalowania
+                self.notepad_text.tag_add(img_tag, "end-2c", "end-1c")
+                self.notepad_text.tag_bind(img_tag, "<Enter>", lambda e: self.notepad_text.config(cursor="sizing"))
+                self.notepad_text.tag_bind(img_tag, "<Leave>", lambda e: self.notepad_text.config(cursor=""))
+                self.notepad_text.tag_bind(img_tag, "<Button-1>", lambda e, n=img_tag, f=filename: self.start_resize(e, n, f))
+                self.notepad_text.tag_bind(img_tag, "<B1-Motion>", self.perform_resize)
+                
+                self.notepad_text.insert(tk.END, "\n")
+            except Exception as e:
+                print(f"Img error: {e}")
+                self.notepad_text.insert(tk.END, f"[[IMG:{filename}]]")
+        else:
+            self.notepad_text.insert(tk.END, f"[[IMG:{filename}]]")
+
+    def start_resize(self, event, tag_name, filename):
+        self.resize_data = {
+            "tag": tag_name,
+            "filename": filename,
+            "start_x": event.x
+        }
+
+    def perform_resize(self, event):
+        if not hasattr(self, 'resize_data'): return
+        data = self.resize_data
+        filename = data["filename"]
+        
+        if filename not in self.pil_images: return
+        orig_pil = self.pil_images[filename]
+        
+        dx = event.x - data["start_x"]
+        
+        current_tk_img = self.images_cache.get(filename)
+        if not current_tk_img: return
+        
+        new_w = max(50, current_tk_img.width() + (dx // 5)) 
+        aspect = orig_pil.height / orig_pil.width
+        new_h = int(new_w * aspect)
+        
+        resized_pil = orig_pil.resize((new_w, new_h), Image.Resampling.NEAREST) 
+        new_tk = ImageTk.PhotoImage(resized_pil)
+        
+        self.images_cache[filename] = new_tk 
+        img_name_in_text = data["tag"] 
+        self.notepad_text.image_configure(img_name_in_text, image=new_tk)
+
+    def serialize_content_with_images(self):
+        content = ""
+        try:
+            for key, value, index in self.notepad_text.dump("1.0", "end-1c", text=True, image=True):
+                if key == "text":
+                    content += value
+                elif key == "image":
+                    parts = value.split('_')
+                    if len(parts) >= 3:
+                        real_filename = "_".join(parts[1:-1]) 
+                        if real_filename in self.images_cache:
+                            tk_img = self.images_cache[real_filename]
+                            w, h = tk_img.width(), tk_img.height()
+                            content += f"[[IMG:{real_filename}|{w}x{h}]]"
+                        else:
+                            content += f"[[IMG:{real_filename}]]"
+                    else:
+                        content += f"[[IMG:unknown.png]]"
+        except Exception as e:
+            print(f"Serialize error: {e}")
+        return content
+
+    def handle_paste(self, e):
+        if not HAS_PILLOW: return
+        try:
+            img = ImageGrab.grabclipboard()
+            if isinstance(img, Image.Image):
+                name = f"img_{uuid.uuid4().hex[:6]}.png"
+                img.save(os.path.join(IMAGES_DIR, name))
+                self.insert_image_direct(name) 
+                return "break"
+        except: pass
+
+    def insert_image(self): 
+        '''Pozwala wybrać obraz z pliku''' 
+        if not HAS_PILLOW: 
+            messagebox.showerror("Błąd", "Brak biblioteki Pillow.") 
+            return 
+
+        file_path = filedialog.askopenfilename( 
+            filetypes=[("Obrazy", "*.png;*.jpg;*.jpeg;*.gif"), ("Wszystkie pliki", "*.*")] 
+        ) 
+        
+        if file_path: 
+            filename = os.path.basename(file_path) 
+            target_path = os.path.join(IMAGES_DIR, filename) 
+            
+            if not os.path.exists(target_path): 
+                try: 
+                    shutil.copy(file_path, target_path) 
+                except Exception as e: 
+                    messagebox.showerror("Błąd", f"Nie udało się skopiować obrazu: {e}") 
+                    return 
+
+            self.insert_image_direct(filename) 
